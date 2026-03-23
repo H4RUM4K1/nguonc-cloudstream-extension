@@ -18,6 +18,16 @@ class NguoncProvider : MainAPI() {
     override val hasMainPage = false
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
+    private fun toDetailUrl(slug: String): String = "$mainUrl/phim/$slug"
+
+    private fun extractSlug(url: String): String {
+        return url
+            .substringBefore("?")
+            .substringBefore("#")
+            .trimEnd('/')
+            .substringAfterLast('/')
+    }
+
     override suspend fun search(query: String): List<SearchResponse> {
         val endpoint = "$apiBase/films/search?keyword=${query.encodeUri()}"
         val response = app.get(endpoint).parsedSafe<SearchEnvelope>() ?: return emptyList()
@@ -26,16 +36,20 @@ class NguoncProvider : MainAPI() {
             val slug = item.slug ?: return@mapNotNull null
             val title = item.name ?: return@mapNotNull null
             val type = if ((item.totalEpisodes ?: 0) > 1) TvType.TvSeries else TvType.Movie
-            newMovieSearchResponse(title, slug, type) {
+            newMovieSearchResponse(title, toDetailUrl(slug), type) {
                 posterUrl = item.posterUrl
             }
         }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val endpoint = "$apiBase/film/$url"
+        val slug = extractSlug(url)
+        if (slug.isBlank()) return null
+
+        val endpoint = "$apiBase/film/$slug"
         val response = app.get(endpoint).parsedSafe<FilmDetailResponse>() ?: return null
         val detail = response.movie ?: return null
+        val detailUrl = toDetailUrl(detail.slug ?: slug)
 
         val episodePayloads = detail.episodes.orEmpty().flatMap { serverGroup ->
             serverGroup.items.mapNotNull { item ->
@@ -59,12 +73,12 @@ class NguoncProvider : MainAPI() {
                 referer = mainUrl
             ).toJson()
 
-            newMovieLoadResponse(detail.name ?: return null, url, TvType.Movie, movieData) {
+            newMovieLoadResponse(detail.name ?: return null, detailUrl, TvType.Movie, movieData) {
                 posterUrl = detail.posterUrl
                 plot = detail.description
             }
         } else {
-            newTvSeriesLoadResponse(detail.name ?: return null, url, TvType.TvSeries, episodePayloads) {
+            newTvSeriesLoadResponse(detail.name ?: return null, detailUrl, TvType.TvSeries, episodePayloads) {
                 posterUrl = detail.posterUrl
                 plot = detail.description
             }
