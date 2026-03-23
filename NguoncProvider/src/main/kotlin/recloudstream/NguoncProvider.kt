@@ -99,6 +99,8 @@ class NguoncProvider : MainAPI() {
             val raw = data.trim()
             if (!raw.startsWith("http")) return false
 
+            var foundRaw = false
+
             if (raw.contains(".m3u8", ignoreCase = true)) {
                 callback(
                     newExtractorLink(name, "$name HLS", raw) {
@@ -107,13 +109,21 @@ class NguoncProvider : MainAPI() {
                         type = ExtractorLinkType.M3U8
                     }
                 )
+                foundRaw = true
             } else {
-                loadExtractor(raw, subtitleCallback, callback)
+                loadExtractor(raw, subtitleCallback) { link ->
+                    foundRaw = true
+                    callback(link)
+                }
             }
-            return true
+            return foundRaw
         }
 
         val reqReferer = payload.referer ?: mainUrl
+        val hlsReferer = payload.embed
+            ?.substringBefore("/embed.php")
+            ?.takeIf { it.startsWith("http") }
+            ?: reqReferer
         var foundAny = false
 
         // Prefer host extractor first because many m3u8 URLs are hotlink-protected.
@@ -125,17 +135,6 @@ class NguoncProvider : MainAPI() {
                 foundAny = true
                 callback(link)
             }
-
-            // Keep a fallback raw embed link for hosts without extractor mapping.
-            if (!foundAny) {
-                callback(
-                    newExtractorLink(name, "$name Embed", embed) {
-                        referer = reqReferer
-                        quality = Qualities.Unknown.value
-                    }
-                )
-                foundAny = true
-            }
         }
 
         // Fallback to direct HLS if extractor did not return any link.
@@ -143,7 +142,7 @@ class NguoncProvider : MainAPI() {
             payload.m3u8?.let { hls ->
                 callback(
                     newExtractorLink(name, "$name HLS", hls) {
-                        referer = reqReferer
+                        referer = hlsReferer
                         quality = Qualities.Unknown.value
                         type = ExtractorLinkType.M3U8
                     }
