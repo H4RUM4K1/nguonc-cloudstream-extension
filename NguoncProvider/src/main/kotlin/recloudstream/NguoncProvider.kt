@@ -33,12 +33,9 @@ class NguoncProvider : MainAPI() {
         val safeReferer = referer.ifBlank { "$mainUrl/" }.let {
             if (it.endsWith('/')) it else "$it/"
         }
-        val origin = safeReferer
-            .substringBefore("//", missingDelimiterValue = "https")
-            .let { scheme ->
-                val hostPart = safeReferer.substringAfter("//", "").substringBefore('/')
-                if (hostPart.isBlank()) "$mainUrl/" else "$scheme://$hostPart"
-            }
+        val scheme = safeReferer.substringBefore("://", missingDelimiterValue = "https")
+        val hostPart = safeReferer.substringAfter("://", "").substringBefore('/')
+        val origin = if (hostPart.isBlank()) mainUrl else "$scheme://$hostPart"
 
         return mapOf(
             "User-Agent" to USER_AGENT,
@@ -48,6 +45,30 @@ class NguoncProvider : MainAPI() {
             "Referer" to safeReferer,
             "Origin" to origin
         )
+    }
+
+    private fun extractM3u8FromText(text: String): String? {
+        val patterns = listOf(
+            Regex("""https?://[^\"'\\\s]+\.m3u8[^\"'\\\s]*""", RegexOption.IGNORE_CASE),
+            Regex("""file\s*[:=]\s*[\"'](https?://[^\"']+\.m3u8[^\"']*)[\"']""", RegexOption.IGNORE_CASE),
+            Regex("""sources\s*[:=]\s*\[[^\]]*?[\"'](https?://[^\"']+\.m3u8[^\"']*)[\"']""", RegexOption.IGNORE_CASE)
+        )
+
+        return patterns.asSequence()
+            .mapNotNull { it.find(text)?.groupValues?.lastOrNull() }
+            .map { it.replace("\\/", "/").trim() }
+            .firstOrNull { it.startsWith("http") && it.contains(".m3u8", ignoreCase = true) }
+    }
+
+    private suspend fun extractM3u8FromEmbed(embedUrl: String, pageReferer: String): String? {
+        return runCatching {
+            val response = app.get(
+                embedUrl,
+                referer = pageReferer,
+                headers = buildStreamHeaders(pageReferer)
+            )
+            extractM3u8FromText(response.text)
+        }.getOrNull()
     }
 
     private suspend fun emitM3u8Candidates(
@@ -180,10 +201,15 @@ class NguoncProvider : MainAPI() {
 
         // Fallback to direct HLS if extractor did not return any link.
         if (!foundAny) {
-            payload.m3u8?.let { hls ->
+            val refreshedM3u8 = payload.embed?.let { embed ->
+                extractM3u8FromEmbed(embed, reqReferer)
+            }
+
+            (refreshedM3u8 ?: payload.m3u8)?.let { hls ->
                 foundAny = emitM3u8Candidates(
                     hls,
                     listOf(
+                        payload.embed ?: "",
                         hlsReferer,
                         reqReferer,
                         mainUrl
