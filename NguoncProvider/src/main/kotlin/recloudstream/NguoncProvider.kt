@@ -29,6 +29,28 @@ class NguoncProvider : MainAPI() {
             .substringAfterLast('/')
     }
 
+    private suspend fun emitM3u8IfValid(
+        m3u8Url: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            val probe = app.get(m3u8Url, referer = referer).text
+            if (!probe.contains("#EXTM3U", ignoreCase = true)) return false
+
+            callback(
+                newExtractorLink(name, "$name HLS", m3u8Url) {
+                    this.referer = referer
+                    quality = Qualities.Unknown.value
+                    type = ExtractorLinkType.M3U8
+                }
+            )
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     override suspend fun search(query: String): List<SearchResponse> {
         val endpoint = "$apiBase/films/search?keyword=${query.encodeUri()}"
         val response = app.get(endpoint).parsedSafe<SearchEnvelope>() ?: return emptyList()
@@ -102,14 +124,7 @@ class NguoncProvider : MainAPI() {
             var foundRaw = false
 
             if (raw.contains(".m3u8", ignoreCase = true)) {
-                callback(
-                    newExtractorLink(name, "$name HLS", raw) {
-                        referer = mainUrl
-                        quality = Qualities.Unknown.value
-                        type = ExtractorLinkType.M3U8
-                    }
-                )
-                foundRaw = true
+                foundRaw = emitM3u8IfValid(raw, mainUrl, callback)
             } else {
                 loadExtractor(raw, subtitleCallback) { link ->
                     foundRaw = true
@@ -140,14 +155,7 @@ class NguoncProvider : MainAPI() {
         // Fallback to direct HLS if extractor did not return any link.
         if (!foundAny) {
             payload.m3u8?.let { hls ->
-                callback(
-                    newExtractorLink(name, "$name HLS", hls) {
-                        referer = hlsReferer
-                        quality = Qualities.Unknown.value
-                        type = ExtractorLinkType.M3U8
-                    }
-                )
-                foundAny = true
+                foundAny = emitM3u8IfValid(hls, hlsReferer, callback)
             }
         }
 
