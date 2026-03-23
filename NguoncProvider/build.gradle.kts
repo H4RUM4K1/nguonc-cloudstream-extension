@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     description = "Phim NguonC provider"
-    language = "vi"
+    language = "en"
     authors = listOf("H4RUM4K1")
 
     status = 1
