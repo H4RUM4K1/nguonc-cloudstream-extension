@@ -30,9 +30,7 @@ class NguoncProvider : MainAPI() {
     }
 
     private fun buildStreamHeaders(referer: String): Map<String, String> {
-        val safeReferer = referer.ifBlank { "$mainUrl/" }.let {
-            if (it.endsWith('/')) it else "$it/"
-        }
+        val safeReferer = referer.ifBlank { "$mainUrl/" }
         val scheme = safeReferer.substringBefore("://", missingDelimiterValue = "https")
         val hostPart = safeReferer.substringAfter("://", "").substringBefore('/')
         val origin = if (hostPart.isBlank()) mainUrl else "$scheme://$hostPart"
@@ -42,6 +40,9 @@ class NguoncProvider : MainAPI() {
             "Accept" to "*/*",
             "Accept-Language" to "en-US,en;q=0.9",
             "Connection" to "keep-alive",
+            "Sec-Fetch-Dest" to "empty",
+            "Sec-Fetch-Mode" to "cors",
+            "Sec-Fetch-Site" to "cross-site",
             "Referer" to safeReferer,
             "Origin" to origin
         )
