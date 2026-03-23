@@ -5,53 +5,69 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 
 class LegalApiProvider : MainAPI() {
-    override var mainUrl = "https://example.com"
-    private val apiBase = "https://example.com/api"
-    override var name = "Legal API Provider"
+    override var mainUrl = "https://phim.nguonc.com"
+    private val apiBase = "https://phim.nguonc.com/api"
+    override var name = "NguonC Phim"
     override val hasMainPage = false
     override var lang = "vi"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // Replace endpoint and field mappings with your official API schema.
+    // Search endpoint: /api/films/search?keyword={query}
     override suspend fun search(query: String): List<SearchResponse> {
-        val endpoint = "$apiBase/search?keyword=${query.urlEncode()}"
+        val endpoint = "$apiBase/films/search?keyword=${query.urlEncode()}"
         val response = app.get(endpoint).parsedSafe<SearchEnvelope>() ?: return emptyList()
 
         return response.items.mapNotNull { item ->
             val url = item.slug ?: return@mapNotNull null
-            newMovieSearchResponse(item.title ?: return@mapNotNull null, url) {
-                this.posterUrl = item.poster
+            newMovieSearchResponse(item.name ?: return@mapNotNull null, url) {
+                this.posterUrl = item.posterUrl
             }
         }
     }
 
-    // `url` may be a slug/id from search results.
+    // Detail endpoint: /api/film/{slug}
     override suspend fun load(url: String): LoadResponse? {
         val endpoint = "$apiBase/film/$url"
-        val detail = app.get(endpoint).parsedSafe<DetailEnvelope>() ?: return null
+        val response = app.get(endpoint).parsedSafe<FilmDetailResponse>() ?: return null
+        val detail = response.movie ?: return null
 
-        val episodes = detail.episodes.orEmpty().mapIndexed { index, ep ->
-            Episode(
-                data = LinkPayload(
-                    stream = ep.streamUrl,
-                    referer = ep.referer ?: mainUrl,
-                    subtitle = ep.subtitle
-                ).toJson(),
-                name = ep.name ?: "Episode ${index + 1}"
-            )
+        val episodes = mutableListOf<Episode>()
+        detail.episodes.orEmpty().forEach { serverGroup ->
+            serverGroup.items.forEach { episodeItem ->
+                episodes.add(
+                    Episode(
+                        data = LinkPayload(
+                            m3u8 = episodeItem.m3u8,
+                            embed = episodeItem.embed,
+                            referer = mainUrl,
+                            posterUrl = detail.posterUrl
+                        ).toJson(),
+                        name = episodeItem.name
+                    )
+                )
+            }
         }
 
         return if (episodes.isEmpty()) {
-            newMovieLoadResponse(detail.title ?: return null, url, TvType.Movie, url) {
-                posterUrl = detail.poster
+            Episode(
+                data = LinkPayload(
+                    m3u8 = detail.m3u8,
+                    embed = detail.embed,
+                    referer = mainUrl,
+                    posterUrl = detail.posterUrl
+                ).toJson(),
+                name = "Full"
+            )
+        )
+
+            newMovieLoadResponse(detail.name ?: return null, url, TvType.Movie, url) {
+                posterUrl = detail.posterUrl
                 plot = detail.description
-                year = detail.year
             }
         } else {
-            newTvSeriesLoadResponse(detail.title ?: return null, url, TvType.TvSeries, episodes) {
-                posterUrl = detail.poster
+            newTvSeriesLoadResponse(detail.name ?: return null, url, TvType.TvSeries, episodes) {
+                posterUrl = detail.posterUrl
                 plot = detail.description
-                year = detail.year
             }
         }
     }
@@ -64,58 +80,92 @@ class LegalApiProvider : MainAPI() {
     ): Boolean {
         val payload = tryParseJson<LinkPayload>(data) ?: return false
 
-        payload.subtitle?.let {
-            subtitleCallback(
-                SubtitleFile(
-                    lang = "Vietnamese",
-                    url = it
+        // Prefer m3u8 for direct streaming
+        payload.m3u8?.let { m3u8Url ->
+            callback(
+                ExtractorLink(
+                    source = name,
+                    name = "$name HLS",
+                    url = m3u8Url,
+                    referer = payload.referer ?: mainUrl,
+                    quality = Qualities.Unknown.value,
+                    type = ExtractorLinkType.M3U8,
+                    isM3u8 = true
                 )
             )
+            return true
         }
 
-        val finalUrl = payload.stream ?: return false
-        callback(
-            ExtractorLink(
-                source = name,
-                name = "$name Stream",
-                url = finalUrl,
-                referer = payload.referer ?: mainUrl,
-                quality = Qualities.Unknown.value,
-                type = INFER_TYPE
+        // Fallback to embed if m3u8 not available
+        payload.embed?.let { embedUrl ->
+            // For embeds, you may need to resolve them further
+            // depending on the host (streamc.xyz, etc.)
+            callback(
+                ExtractorLink(
+                    source = name,
+                    name = "$name Embed",
+                    url = embedUrl,
+                    referer = payload.referer ?: mainUrl,
+                    quality = Qualities.Unknown.value,
+                   type = INFER_TYPE
+                )
             )
-        )
+            return true
+        }
 
-        return true
+        return false
     }
 }
 
+
+
+
+
+data class LinkPayload(
+    @JsonProperty("m3u8") val m3u8: String? = null,
+    @JsonProperty("embed") val embed: String? = null,
+    @JsonProperty("referer") val referer: String? = null,
+    @JsonProperty("posterUrl") val posterUrl: String? = null
+)
+
+// Search API Response: /api/films/search?keyword={query}
 data class SearchEnvelope(
+    @JsonProperty("status") val status: String? = null,
     @JsonProperty("items") val items: List<SearchItem> = emptyList()
 )
 
 data class SearchItem(
-    @JsonProperty("title") val title: String? = null,
-    @JsonProperty("slug") val slug: String? = null,
-    @JsonProperty("poster") val poster: String? = null
-)
-
-data class DetailEnvelope(
-    @JsonProperty("title") val title: String? = null,
-    @JsonProperty("description") val description: String? = null,
-    @JsonProperty("poster") val poster: String? = null,
-    @JsonProperty("year") val year: Int? = null,
-    @JsonProperty("episodes") val episodes: List<ApiEpisode>? = null
-)
-
-data class ApiEpisode(
     @JsonProperty("name") val name: String? = null,
-    @JsonProperty("streamUrl") val streamUrl: String? = null,
-    @JsonProperty("referer") val referer: String? = null,
-    @JsonProperty("subtitle") val subtitle: String? = null
+    @JsonProperty("slug") val slug: String? = null,
+    @JsonProperty("poster_url") val posterUrl: String? = null,
+    @JsonProperty("description") val description: String? = null,
+    @JsonProperty("total_episodes") val totalEpisodes: Int? = null
 )
 
-data class LinkPayload(
-    @JsonProperty("stream") val stream: String? = null,
-    @JsonProperty("referer") val referer: String? = null,
-    @JsonProperty("subtitle") val subtitle: String? = null
+// Detail API Response: /api/film/{slug}
+data class FilmDetailResponse(
+    @JsonProperty("status") val status: String? = null,
+    @JsonProperty("movie") val movie: MovieDetail? = null
+)
+
+data class MovieDetail(
+    @JsonProperty("id") val id: String? = null,
+    @JsonProperty("name") val name: String? = null,
+    @JsonProperty("slug") val slug: String? = null,
+    @JsonProperty("poster_url") val posterUrl: String? = null,
+    @JsonProperty("description") val description: String? = null,
+    @JsonProperty("total_episodes") val totalEpisodes: Int? = null,
+    @JsonProperty("episodes") val episodes: List<EpisodeServer> = emptyList()
+)
+
+data class EpisodeServer(
+    @JsonProperty("server_name") val serverName: String? = null,
+    @JsonProperty("items") val items: List<EpisodeItem> = emptyList()
+)
+
+data class EpisodeItem(
+    @JsonProperty("name") val name: String? = null,
+    @JsonProperty("slug") val slug: String? = null,
+    @JsonProperty("embed") val embed: String? = null,
+    @JsonProperty("m3u8") val m3u8: String? = null
 )
