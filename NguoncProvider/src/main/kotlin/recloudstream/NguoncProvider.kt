@@ -116,17 +116,7 @@ class NguoncProvider : MainAPI() {
         val reqReferer = payload.referer ?: mainUrl
         var foundAny = false
 
-        payload.m3u8?.let { hls ->
-            callback(
-                newExtractorLink(name, "$name HLS", hls) {
-                    referer = reqReferer
-                    quality = Qualities.Unknown.value
-                    type = ExtractorLinkType.M3U8
-                }
-            )
-            foundAny = true
-        }
-
+        // Prefer host extractor first because many m3u8 URLs are hotlink-protected.
         payload.embed?.let { embed ->
             loadExtractor(
                 embed,
@@ -142,6 +132,20 @@ class NguoncProvider : MainAPI() {
                     newExtractorLink(name, "$name Embed", embed) {
                         referer = reqReferer
                         quality = Qualities.Unknown.value
+                    }
+                )
+                foundAny = true
+            }
+        }
+
+        // Fallback to direct HLS if extractor did not return any link.
+        if (!foundAny) {
+            payload.m3u8?.let { hls ->
+                callback(
+                    newExtractorLink(name, "$name HLS", hls) {
+                        referer = reqReferer
+                        quality = Qualities.Unknown.value
+                        type = ExtractorLinkType.M3U8
                     }
                 )
                 foundAny = true
