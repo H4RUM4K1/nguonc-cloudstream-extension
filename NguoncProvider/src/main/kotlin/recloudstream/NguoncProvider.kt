@@ -40,14 +40,15 @@ class NguoncProvider : MainAPI() {
         val episodePayloads = detail.episodes.orEmpty().flatMap { serverGroup ->
             serverGroup.items.mapNotNull { item ->
                 if (item.m3u8.isNullOrBlank() && item.embed.isNullOrBlank()) return@mapNotNull null
-                Episode(
-                    data = LinkPayload(
+                newEpisode(
+                    LinkPayload(
                         m3u8 = item.m3u8,
                         embed = item.embed,
                         referer = mainUrl
-                    ).toJson(),
+                    ).toJson()
+                ) {
                     name = item.name ?: "Episode"
-                )
+                }
             }
         }
 
