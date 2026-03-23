@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.StringUtils.encodeUri
+import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class NguoncProvider : MainAPI() {
@@ -56,9 +57,9 @@ class NguoncProvider : MainAPI() {
                 if (item.m3u8.isNullOrBlank() && item.embed.isNullOrBlank()) return@mapNotNull null
                 newEpisode(
                     LinkPayload(
-                        m3u8 = item.m3u8,
-                        embed = item.embed,
-                        referer = mainUrl
+                        m3u8 = item.m3u8?.trim(),
+                        embed = item.embed?.trim(),
+                        referer = detailUrl
                     ).toJson()
                 ) {
                     name = item.name ?: "Episode"
@@ -70,7 +71,7 @@ class NguoncProvider : MainAPI() {
             val movieData = episodePayloads.firstOrNull()?.data ?: LinkPayload(
                 m3u8 = null,
                 embed = null,
-                referer = mainUrl
+                referer = detailUrl
             ).toJson()
 
             newMovieLoadResponse(detail.name ?: return null, detailUrl, TvType.Movie, movieData) {
@@ -91,30 +92,63 @@ class NguoncProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val payload = tryParseJson<LinkPayload>(data) ?: return false
+        val payload = tryParseJson<LinkPayload>(data)
+
+        // Some app versions/providers may pass raw URLs instead of JSON payloads.
+        if (payload == null) {
+            val raw = data.trim()
+            if (!raw.startsWith("http")) return false
+
+            if (raw.contains(".m3u8", ignoreCase = true)) {
+                callback(
+                    newExtractorLink(name, "$name HLS", raw) {
+                        referer = mainUrl
+                        quality = Qualities.Unknown.value
+                        type = ExtractorLinkType.M3U8
+                    }
+                )
+            } else {
+                loadExtractor(raw, subtitleCallback, callback)
+            }
+            return true
+        }
+
+        val referer = payload.referer ?: mainUrl
+        var foundAny = false
 
         payload.m3u8?.let { hls ->
             callback(
                 newExtractorLink(name, "$name HLS", hls) {
-                    referer = payload.referer ?: mainUrl
+                    referer = referer
                     quality = Qualities.Unknown.value
                     type = ExtractorLinkType.M3U8
                 }
             )
-            return true
+            foundAny = true
         }
 
         payload.embed?.let { embed ->
-            callback(
-                newExtractorLink(name, "$name Embed", embed) {
-                    referer = payload.referer ?: mainUrl
-                    quality = Qualities.Unknown.value
-                }
-            )
-            return true
+            loadExtractor(
+                embed,
+                subtitleCallback
+            ) { link ->
+                foundAny = true
+                callback(link)
+            }
+
+            // Keep a fallback raw embed link for hosts without extractor mapping.
+            if (!foundAny) {
+                callback(
+                    newExtractorLink(name, "$name Embed", embed) {
+                        referer = referer
+                        quality = Qualities.Unknown.value
+                    }
+                )
+                foundAny = true
+            }
         }
 
-        return false
+        return foundAny
     }
 }
 
