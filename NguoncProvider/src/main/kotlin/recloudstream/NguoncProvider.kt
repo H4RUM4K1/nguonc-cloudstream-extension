@@ -12,10 +12,10 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class NguoncProvider : MainAPI() {
-    override var mainUrl = "https://phim.nguonc.com"
-    private val apiBase = "$mainUrl/api"
-    override var name = "NguonC"
-    override var lang = "en"
+    override var mainUrl = "https://ophim17.cc"
+    private val apiBase = "$mainUrl/v1/api"
+    override var name = "OPhim17"
+    override var lang = "vi"
     override val hasMainPage = false
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
@@ -29,156 +29,29 @@ class NguoncProvider : MainAPI() {
             .substringAfterLast('/')
     }
 
-    private fun baseOrigin(url: String?): String? {
-        if (url.isNullOrBlank() || !url.startsWith("http")) return null
-        val scheme = url.substringBefore("://", missingDelimiterValue = "https")
-        val host = url.substringAfter("://", "").substringBefore('/')
-        if (host.isBlank()) return null
-        return "$scheme://$host"
-    }
-
-    private fun isIgnoredM3u8(url: String?): Boolean {
-        return url?.lowercase()?.contains("sing.phimmoi.net") == true
-    }
-
-    private fun sanitizeM3u8(url: String?): String? {
-        val value = url?.trim()
-        if (value.isNullOrBlank()) return null
-        return if (isIgnoredM3u8(value)) null else value
-    }
-
-    private fun refererVariants(vararg refs: String?): List<String> {
-        return refs.asSequence()
-            .filterNotNull()
-            .map { it.trim() }
-            .filter { it.startsWith("http") }
-            .flatMap { sequenceOf(it, if (it.endsWith('/')) it else "$it/") }
-            .distinct()
-            .toList()
-    }
-
-    private fun buildStreamHeaders(referer: String): Map<String, String> {
-        val safeReferer = referer.ifBlank { "$mainUrl/" }
-        val scheme = safeReferer.substringBefore("://", missingDelimiterValue = "https")
-        val hostPart = safeReferer.substringAfter("://", "").substringBefore('/')
-        val origin = if (hostPart.isBlank()) mainUrl else "$scheme://$hostPart"
-
-        return mapOf(
-            "User-Agent" to USER_AGENT,
-            "Accept" to "*/*",
-            "Accept-Language" to "en-US,en;q=0.9",
-            "Connection" to "keep-alive",
-            "Range" to "bytes=0-",
-            "Sec-Fetch-Dest" to "empty",
-            "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Site" to "cross-site",
-            "Referer" to safeReferer,
-            "Origin" to origin
-        )
-    }
-
-    private fun extractM3u8FromText(text: String): String? {
-        val patterns = listOf(
-            Regex("""https?://[^\"'\\\s]+\.m3u8[^\"'\\\s]*""", RegexOption.IGNORE_CASE),
-            Regex("""file\s*[:=]\s*[\"'](https?://[^\"']+\.m3u8[^\"']*)[\"']""", RegexOption.IGNORE_CASE),
-            Regex("""sources\s*[:=]\s*\[[^\]]*?[\"'](https?://[^\"']+\.m3u8[^\"']*)[\"']""", RegexOption.IGNORE_CASE)
-        )
-
-        return patterns.asSequence()
-            .mapNotNull { it.find(text)?.groupValues?.lastOrNull() }
-            .map { it.replace("\\/", "/").trim() }
-            .firstOrNull { it.startsWith("http") && it.contains(".m3u8", ignoreCase = true) }
-    }
-
-    private suspend fun extractM3u8FromEmbed(embedUrl: String, pageReferer: String): String? {
-        return runCatching {
-            val response = app.get(
-                embedUrl,
-                referer = pageReferer,
-                headers = buildStreamHeaders(pageReferer)
-            )
-            extractM3u8FromText(response.text)
-        }.getOrNull()
-    }
-
-    private suspend fun isPlayableM3u8(m3u8Url: String, referer: String): Boolean {
-        if (isIgnoredM3u8(m3u8Url)) return false
-
-        return runCatching {
-            val body = app.get(
-                m3u8Url,
-                referer = referer,
-                headers = buildStreamHeaders(referer)
-            ).text
-
-            val sample = body.take(2048)
-            sample.contains("#EXTM3U", ignoreCase = true) ||
-                sample.contains("#EXT-X-", ignoreCase = true)
-        }.getOrDefault(false)
-    }
-
-    private suspend fun emitM3u8Candidates(
-        m3u8Url: String,
-        referers: List<String>,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        if (isIgnoredM3u8(m3u8Url)) return false
-
-        val candidates = referers
-            .map { it.trim() }
-            .filter { it.startsWith("http") }
-            .distinct()
-
-        if (candidates.isEmpty()) return false
-
-        for (ref in candidates) {
-            if (!isPlayableM3u8(m3u8Url, ref)) continue
-
-            callback(
-                newExtractorLink(name, "$name HLS", m3u8Url) {
-                    this.referer = ref
-                    this.headers = buildStreamHeaders(ref)
-                    quality = Qualities.Unknown.value
-                    type = ExtractorLinkType.M3U8
-                }
-            )
-
-            // One verified candidate is enough; avoid duplicate dead variants.
-            return true
+    private fun detectType(searchItem: OphimSearchItem): TvType {
+        val current = searchItem.episodeCurrent.orEmpty().lowercase()
+        return if (
+            current.contains("hoan tat") ||
+            current.contains("tap") ||
+            current.contains("episode")
+        ) {
+            TvType.TvSeries
+        } else {
+            TvType.Movie
         }
-
-        return false
-    }
-
-    private suspend fun emitSingleM3u8Fallback(
-        m3u8Url: String,
-        referers: List<String>,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        if (isIgnoredM3u8(m3u8Url)) return false
-
-        val ref = referers.firstOrNull { it.startsWith("http") } ?: return false
-        callback(
-            newExtractorLink(name, "$name HLS", m3u8Url) {
-                this.referer = ref
-                this.headers = buildStreamHeaders(ref)
-                quality = Qualities.Unknown.value
-                type = ExtractorLinkType.M3U8
-            }
-        )
-        return true
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val endpoint = "$apiBase/films/search?keyword=${query.encodeUri()}"
-        val response = app.get(endpoint).parsedSafe<SearchEnvelope>() ?: return emptyList()
+        val endpoint = "$apiBase/tim-kiem?keyword=${query.encodeUri()}&page=1"
+        val response = app.get(endpoint).parsedSafe<OphimSearchResponse>() ?: return emptyList()
+        val items = response.data?.items.orEmpty()
 
-        return response.items.mapNotNull { item ->
-            val slug = item.slug ?: return@mapNotNull null
+        return items.mapNotNull { item ->
             val title = item.name ?: return@mapNotNull null
-            val type = if ((item.totalEpisodes ?: 0) > 1) TvType.TvSeries else TvType.Movie
-            newMovieSearchResponse(title, toDetailUrl(slug), type) {
-                posterUrl = item.posterUrl
+            val slug = item.slug ?: return@mapNotNull null
+            newMovieSearchResponse(title, toDetailUrl(slug), detectType(item)) {
+                posterUrl = item.posterUrl ?: item.thumbUrl
             }
         }
     }
@@ -187,20 +60,22 @@ class NguoncProvider : MainAPI() {
         val slug = extractSlug(url)
         if (slug.isBlank()) return null
 
-        val endpoint = "$apiBase/film/$slug"
-        val response = app.get(endpoint).parsedSafe<FilmDetailResponse>() ?: return null
-        val detail = response.movie ?: return null
-        val detailUrl = toDetailUrl(detail.slug ?: slug)
+        val endpoint = "$mainUrl/phim/$slug"
+        val response = app.get(endpoint).parsedSafe<OphimDetailResponse>() ?: return null
+        val movie = response.movie ?: return null
 
-        val episodePayloads = detail.episodes.orEmpty().flatMap { serverGroup ->
-            serverGroup.items.mapNotNull { item ->
-                val safeM3u8 = sanitizeM3u8(item.m3u8)
-                val safeEmbed = item.embed?.trim()
-                if (safeM3u8.isNullOrBlank() && safeEmbed.isNullOrBlank()) return@mapNotNull null
+        val detailUrl = toDetailUrl(movie.slug ?: slug)
+
+        val episodes = response.episodes.orEmpty().flatMap { server ->
+            server.serverData.orEmpty().mapNotNull { item ->
+                val m3u8 = item.linkM3u8?.trim()
+                val embed = item.linkEmbed?.trim()
+                if (m3u8.isNullOrBlank() && embed.isNullOrBlank()) return@mapNotNull null
+
                 newEpisode(
                     LinkPayload(
-                        m3u8 = safeM3u8,
-                        embed = safeEmbed,
+                        m3u8 = m3u8,
+                        embed = embed,
                         referer = detailUrl
                     ).toJson()
                 ) {
@@ -209,21 +84,24 @@ class NguoncProvider : MainAPI() {
             }
         }
 
-        return if (episodePayloads.isEmpty() || (detail.totalEpisodes ?: 1) <= 1) {
-            val movieData = episodePayloads.firstOrNull()?.data ?: LinkPayload(
+        val isSeries = (movie.type ?: "").contains("series", ignoreCase = true) ||
+            episodes.size > 1
+
+        return if (isSeries) {
+            newTvSeriesLoadResponse(movie.name ?: return null, detailUrl, TvType.TvSeries, episodes) {
+                posterUrl = movie.posterUrl ?: movie.thumbUrl
+                plot = movie.content
+            }
+        } else {
+            val movieData = episodes.firstOrNull()?.data ?: LinkPayload(
                 m3u8 = null,
                 embed = null,
                 referer = detailUrl
             ).toJson()
 
-            newMovieLoadResponse(detail.name ?: return null, detailUrl, TvType.Movie, movieData) {
-                posterUrl = detail.posterUrl
-                plot = detail.description
-            }
-        } else {
-            newTvSeriesLoadResponse(detail.name ?: return null, detailUrl, TvType.TvSeries, episodePayloads) {
-                posterUrl = detail.posterUrl
-                plot = detail.description
+            newMovieLoadResponse(movie.name ?: return null, detailUrl, TvType.Movie, movieData) {
+                posterUrl = movie.posterUrl ?: movie.thumbUrl
+                plot = movie.content
             }
         }
     }
@@ -236,89 +114,52 @@ class NguoncProvider : MainAPI() {
     ): Boolean {
         val payload = tryParseJson<LinkPayload>(data)
 
-        // Some app versions/providers may pass raw URLs instead of JSON payloads.
+        // Some app/provider flows may pass a raw URL directly.
         if (payload == null) {
             val raw = data.trim()
             if (!raw.startsWith("http")) return false
 
-            var foundRaw = false
-
-            if (raw.contains(".m3u8", ignoreCase = true)) {
-                if (isIgnoredM3u8(raw)) return false
-                foundRaw = emitM3u8Candidates(raw, listOf(mainUrl), callback)
+            return if (raw.contains(".m3u8", ignoreCase = true)) {
+                callback(
+                    newExtractorLink(name, "$name HLS", raw) {
+                        referer = mainUrl
+                        quality = Qualities.Unknown.value
+                        type = ExtractorLinkType.M3U8
+                    }
+                )
+                true
             } else {
+                var found = false
                 loadExtractor(raw, mainUrl, subtitleCallback) { link ->
-                    if (isIgnoredM3u8(link.url)) return@loadExtractor
-                    foundRaw = true
+                    found = true
                     callback(link)
                 }
+                found
             }
-            return foundRaw
         }
 
         val reqReferer = payload.referer ?: mainUrl
-        val hlsReferer = payload.embed
-            ?.substringBefore("/embed.php")
-            ?.takeIf { it.startsWith("http") }
-            ?: reqReferer
-        val m3u8Origin = baseOrigin(payload.m3u8?.takeUnless { isIgnoredM3u8(it) })
-        val embedOrigin = baseOrigin(payload.embed)
         var foundAny = false
 
-        // Try to resolve from embed first to obtain the freshest tokenized m3u8.
-        val refreshedM3u8 = payload.embed?.let { embed ->
-            extractM3u8FromEmbed(embed, reqReferer)
-        }
-
-        // Use direct HLS only after verification. Avoid extractor dead links.
-        if (!foundAny) {
-            val fallbackM3u8 = listOfNotNull(
-                sanitizeM3u8(refreshedM3u8),
-                sanitizeM3u8(payload.m3u8)
-            ).firstOrNull()
-
-            fallbackM3u8?.let { hls ->
-                foundAny = emitM3u8Candidates(
-                    hls,
-                    refererVariants(
-                        m3u8Origin,
-                        embedOrigin,
-                        hlsReferer,
-                        reqReferer,
-                        mainUrl
-                    ),
-                    callback
-                )
-
-                // If strict validation rejects all candidates, still return one
-                // non-blocked fallback link to avoid "link not found".
-                if (!foundAny) {
-                    foundAny = emitSingleM3u8Fallback(
-                        hls,
-                        refererVariants(
-                            embedOrigin,
-                            hlsReferer,
-                            reqReferer,
-                            mainUrl
-                        ),
-                        callback
-                    )
-                }
+        // Prefer embed extraction first.
+        payload.embed?.let { embed ->
+            loadExtractor(embed, reqReferer, subtitleCallback) { link ->
+                foundAny = true
+                callback(link)
             }
         }
 
-        // Last resort: let extractor resolve from embed if no HLS candidate survived.
+        // Fallback to direct HLS link.
         if (!foundAny) {
-            payload.embed?.let { embed ->
-                loadExtractor(
-                    embed,
-                    reqReferer,
-                    subtitleCallback
-                ) { link ->
-                    if (isIgnoredM3u8(link.url)) return@loadExtractor
-                    foundAny = true
-                    callback(link)
-                }
+            payload.m3u8?.let { hls ->
+                callback(
+                    newExtractorLink(name, "$name HLS", hls) {
+                        referer = reqReferer
+                        quality = Qualities.Unknown.value
+                        type = ExtractorLinkType.M3U8
+                    }
+                )
+                foundAny = true
             }
         }
 
@@ -332,40 +173,47 @@ data class LinkPayload(
     @JsonProperty("referer") val referer: String? = null
 )
 
-data class SearchEnvelope(
+data class OphimSearchResponse(
     @JsonProperty("status") val status: String? = null,
-    @JsonProperty("items") val items: List<SearchItem> = emptyList()
+    @JsonProperty("data") val data: OphimSearchData? = null
 )
 
-data class SearchItem(
+data class OphimSearchData(
+    @JsonProperty("items") val items: List<OphimSearchItem> = emptyList()
+)
+
+data class OphimSearchItem(
     @JsonProperty("name") val name: String? = null,
     @JsonProperty("slug") val slug: String? = null,
+    @JsonProperty("thumb_url") val thumbUrl: String? = null,
     @JsonProperty("poster_url") val posterUrl: String? = null,
-    @JsonProperty("total_episodes") val totalEpisodes: Int? = null
+    @JsonProperty("episode_current") val episodeCurrent: String? = null
 )
 
-data class FilmDetailResponse(
+data class OphimDetailResponse(
     @JsonProperty("status") val status: String? = null,
-    @JsonProperty("movie") val movie: MovieDetail? = null
+    @JsonProperty("movie") val movie: OphimMovie? = null,
+    @JsonProperty("episodes") val episodes: List<OphimEpisodeServer>? = null
 )
 
-data class MovieDetail(
+data class OphimMovie(
     @JsonProperty("name") val name: String? = null,
     @JsonProperty("slug") val slug: String? = null,
+    @JsonProperty("thumb_url") val thumbUrl: String? = null,
     @JsonProperty("poster_url") val posterUrl: String? = null,
-    @JsonProperty("description") val description: String? = null,
-    @JsonProperty("total_episodes") val totalEpisodes: Int? = null,
-    @JsonProperty("episodes") val episodes: List<EpisodeServer>? = null
+    @JsonProperty("content") val content: String? = null,
+    @JsonProperty("type") val type: String? = null,
+    @JsonProperty("episode_current") val episodeCurrent: String? = null
 )
 
-data class EpisodeServer(
+data class OphimEpisodeServer(
     @JsonProperty("server_name") val serverName: String? = null,
-    @JsonProperty("items") val items: List<EpisodeItem> = emptyList()
+    @JsonProperty("server_data") val serverData: List<OphimEpisodeItem>? = null
 )
 
-data class EpisodeItem(
+data class OphimEpisodeItem(
     @JsonProperty("name") val name: String? = null,
     @JsonProperty("slug") val slug: String? = null,
-    @JsonProperty("embed") val embed: String? = null,
-    @JsonProperty("m3u8") val m3u8: String? = null
+    @JsonProperty("link_embed") val linkEmbed: String? = null,
+    @JsonProperty("link_m3u8") val linkM3u8: String? = null
 )
