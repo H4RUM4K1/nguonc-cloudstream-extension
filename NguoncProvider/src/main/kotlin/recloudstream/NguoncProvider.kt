@@ -113,13 +113,13 @@ class NguoncProvider : MainAPI() {
             return true
         }
 
-        val referer = payload.referer ?: mainUrl
+        val reqReferer = payload.referer ?: mainUrl
         var foundAny = false
 
         payload.m3u8?.let { hls ->
             callback(
                 newExtractorLink(name, "$name HLS", hls) {
-                    referer = referer
+                    referer = reqReferer
                     quality = Qualities.Unknown.value
                     type = ExtractorLinkType.M3U8
                 }
@@ -140,7 +140,7 @@ class NguoncProvider : MainAPI() {
             if (!foundAny) {
                 callback(
                     newExtractorLink(name, "$name Embed", embed) {
-                        referer = referer
+                        referer = reqReferer
                         quality = Qualities.Unknown.value
                     }
                 )
