@@ -43,6 +43,16 @@ class NguoncProvider : MainAPI() {
         return e.contains("streamc.xyz") || h.contains("sing.phimmoi.net")
     }
 
+    private fun refererVariants(vararg refs: String?): List<String> {
+        return refs.asSequence()
+            .filterNotNull()
+            .map { it.trim() }
+            .filter { it.startsWith("http") }
+            .flatMap { sequenceOf(it, if (it.endsWith('/')) it else "$it/") }
+            .distinct()
+            .toList()
+    }
+
     private fun buildStreamHeaders(referer: String): Map<String, String> {
         val safeReferer = referer.ifBlank { "$mainUrl/" }
         val scheme = safeReferer.substringBefore("://", missingDelimiterValue = "https")
@@ -205,17 +215,32 @@ class NguoncProvider : MainAPI() {
         val embedOrigin = baseOrigin(payload.embed)
         var foundAny = false
 
+        // Try to resolve from embed first to obtain the freshest tokenized m3u8.
+        val refreshedM3u8 = payload.embed?.let { embed ->
+            extractM3u8FromEmbed(embed, reqReferer)
+        }
+
+        // Attempt extractor on embed early, but don't rely solely on it.
+        payload.embed?.let { embed ->
+            loadExtractor(
+                embed,
+                reqReferer,
+                subtitleCallback
+            ) { link ->
+                foundAny = true
+                callback(link)
+            }
+        }
+
         // streamc/sing links are often blocked when routed through generic extractors,
-        // so prefer direct m3u8 links with explicit headers first.
+        // so prefer direct m3u8 links with explicit headers.
         if (isDirectHlsPreferred(payload.embed, payload.m3u8)) {
-            payload.m3u8?.let { direct ->
+            (refreshedM3u8 ?: payload.m3u8)?.let { direct ->
                 foundAny = emitM3u8Candidates(
                     direct,
-                    listOfNotNull(
+                    refererVariants(
                         m3u8Origin,
-                        "$m3u8Origin/",
                         embedOrigin,
-                        "$embedOrigin/",
                         hlsReferer,
                         reqReferer,
                         mainUrl
@@ -225,34 +250,14 @@ class NguoncProvider : MainAPI() {
             }
         }
 
-        // Prefer host extractor first because many m3u8 URLs are hotlink-protected.
+        // Fallback to direct HLS if embed extraction did not produce playable links.
         if (!foundAny) {
-            payload.embed?.let { embed ->
-                loadExtractor(
-                    embed,
-                    reqReferer,
-                    subtitleCallback
-                ) { link ->
-                    foundAny = true
-                    callback(link)
-                }
-            }
-        }
-
-        // Fallback to direct HLS if extractor did not return any link.
-        if (!foundAny) {
-            val refreshedM3u8 = payload.embed?.let { embed ->
-                extractM3u8FromEmbed(embed, reqReferer)
-            }
-
             (refreshedM3u8 ?: payload.m3u8)?.let { hls ->
                 foundAny = emitM3u8Candidates(
                     hls,
-                    listOf(
-                        m3u8Origin ?: "",
-                        "$m3u8Origin/",
-                        embedOrigin ?: "",
-                        "$embedOrigin/",
+                    refererVariants(
+                        m3u8Origin,
+                        embedOrigin,
                         hlsReferer,
                         reqReferer,
                         mainUrl
