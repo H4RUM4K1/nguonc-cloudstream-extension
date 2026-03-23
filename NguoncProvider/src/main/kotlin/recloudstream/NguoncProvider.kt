@@ -29,7 +29,7 @@ class NguoncProvider : MainAPI() {
             .substringAfterLast('/')
     }
 
-    private fun emitM3u8Candidates(
+    private suspend fun emitM3u8Candidates(
         m3u8Url: String,
         referers: List<String>,
         callback: (ExtractorLink) -> Unit
