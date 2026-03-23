@@ -1,0 +1,8 @@
+{
+  "name": "Nguonc CloudStream Repository",
+  "description": "Nguonc CloudStream extension feed",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/H4RUM4K1/nguonc-cloudstream-extension/builds/plugins.json"
+  ]
+}
