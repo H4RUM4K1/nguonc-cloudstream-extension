@@ -29,6 +29,27 @@ class NguoncProvider : MainAPI() {
             .substringAfterLast('/')
     }
 
+    private fun buildStreamHeaders(referer: String): Map<String, String> {
+        val safeReferer = referer.ifBlank { "$mainUrl/" }.let {
+            if (it.endsWith('/')) it else "$it/"
+        }
+        val origin = safeReferer
+            .substringBefore("//", missingDelimiterValue = "https")
+            .let { scheme ->
+                val hostPart = safeReferer.substringAfter("//", "").substringBefore('/')
+                if (hostPart.isBlank()) "$mainUrl/" else "$scheme://$hostPart"
+            }
+
+        return mapOf(
+            "User-Agent" to USER_AGENT,
+            "Accept" to "*/*",
+            "Accept-Language" to "en-US,en;q=0.9",
+            "Connection" to "keep-alive",
+            "Referer" to safeReferer,
+            "Origin" to origin
+        )
+    }
+
     private suspend fun emitM3u8Candidates(
         m3u8Url: String,
         referers: List<String>,
@@ -45,6 +66,7 @@ class NguoncProvider : MainAPI() {
             callback(
                 newExtractorLink(name, "$name HLS", m3u8Url) {
                     this.referer = ref
+                    this.headers = buildStreamHeaders(ref)
                     quality = Qualities.Unknown.value
                     type = ExtractorLinkType.M3U8
                 }
@@ -129,7 +151,7 @@ class NguoncProvider : MainAPI() {
             if (raw.contains(".m3u8", ignoreCase = true)) {
                 foundRaw = emitM3u8Candidates(raw, listOf(mainUrl), callback)
             } else {
-                loadExtractor(raw, subtitleCallback) { link ->
+                loadExtractor(raw, mainUrl, subtitleCallback) { link ->
                     foundRaw = true
                     callback(link)
                 }
@@ -148,6 +170,7 @@ class NguoncProvider : MainAPI() {
         payload.embed?.let { embed ->
             loadExtractor(
                 embed,
+                reqReferer,
                 subtitleCallback
             ) { link ->
                 foundAny = true
