@@ -37,10 +37,8 @@ class NguoncProvider : MainAPI() {
         return "$scheme://$host"
     }
 
-    private fun isDirectHlsPreferred(embed: String?, m3u8: String?): Boolean {
-        val e = embed.orEmpty().lowercase()
-        val h = m3u8.orEmpty().lowercase()
-        return e.contains("streamc.xyz") || h.contains("sing.phimmoi.net")
+    private fun isIgnoredM3u8(url: String?): Boolean {
+        return url?.lowercase()?.contains("sing.phimmoi.net") == true
     }
 
     private fun refererVariants(vararg refs: String?): List<String> {
@@ -196,6 +194,7 @@ class NguoncProvider : MainAPI() {
             var foundRaw = false
 
             if (raw.contains(".m3u8", ignoreCase = true)) {
+                if (isIgnoredM3u8(raw)) return false
                 foundRaw = emitM3u8Candidates(raw, listOf(mainUrl), callback)
             } else {
                 loadExtractor(raw, mainUrl, subtitleCallback) { link ->
@@ -211,7 +210,7 @@ class NguoncProvider : MainAPI() {
             ?.substringBefore("/embed.php")
             ?.takeIf { it.startsWith("http") }
             ?: reqReferer
-        val m3u8Origin = baseOrigin(payload.m3u8)
+        val m3u8Origin = baseOrigin(payload.m3u8?.takeUnless { isIgnoredM3u8(it) })
         val embedOrigin = baseOrigin(payload.embed)
         var foundAny = false
 
@@ -232,27 +231,14 @@ class NguoncProvider : MainAPI() {
             }
         }
 
-        // streamc/sing links are often blocked when routed through generic extractors,
-        // so prefer direct m3u8 links with explicit headers.
-        if (isDirectHlsPreferred(payload.embed, payload.m3u8)) {
-            (refreshedM3u8 ?: payload.m3u8)?.let { direct ->
-                foundAny = emitM3u8Candidates(
-                    direct,
-                    refererVariants(
-                        m3u8Origin,
-                        embedOrigin,
-                        hlsReferer,
-                        reqReferer,
-                        mainUrl
-                    ),
-                    callback
-                )
-            }
-        }
-
         // Fallback to direct HLS if embed extraction did not produce playable links.
         if (!foundAny) {
-            (refreshedM3u8 ?: payload.m3u8)?.let { hls ->
+            val fallbackM3u8 = listOfNotNull(
+                refreshedM3u8?.takeUnless { isIgnoredM3u8(it) },
+                payload.m3u8?.takeUnless { isIgnoredM3u8(it) }
+            ).firstOrNull()
+
+            fallbackM3u8?.let { hls ->
                 foundAny = emitM3u8Candidates(
                     hls,
                     refererVariants(
