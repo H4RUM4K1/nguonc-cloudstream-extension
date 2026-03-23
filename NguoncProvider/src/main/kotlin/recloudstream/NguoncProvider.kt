@@ -101,6 +101,22 @@ class NguoncProvider : MainAPI() {
         }.getOrNull()
     }
 
+    private suspend fun isPlayableM3u8(m3u8Url: String, referer: String): Boolean {
+        if (isIgnoredM3u8(m3u8Url)) return false
+
+        return runCatching {
+            val body = app.get(
+                m3u8Url,
+                referer = referer,
+                headers = buildStreamHeaders(referer)
+            ).text
+
+            val sample = body.take(2048)
+            sample.contains("#EXTM3U", ignoreCase = true) ||
+                sample.contains("#EXT-X-", ignoreCase = true)
+        }.getOrDefault(false)
+    }
+
     private suspend fun emitM3u8Candidates(
         m3u8Url: String,
         referers: List<String>,
@@ -115,7 +131,9 @@ class NguoncProvider : MainAPI() {
 
         if (candidates.isEmpty()) return false
 
-        candidates.forEach { ref ->
+        for (ref in candidates) {
+            if (!isPlayableM3u8(m3u8Url, ref)) continue
+
             callback(
                 newExtractorLink(name, "$name HLS", m3u8Url) {
                     this.referer = ref
@@ -124,9 +142,12 @@ class NguoncProvider : MainAPI() {
                     type = ExtractorLinkType.M3U8
                 }
             )
+
+            // One verified candidate is enough; avoid duplicate dead variants.
+            return true
         }
 
-        return true
+        return false
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -230,20 +251,7 @@ class NguoncProvider : MainAPI() {
             extractM3u8FromEmbed(embed, reqReferer)
         }
 
-        // Attempt extractor on embed early, but don't rely solely on it.
-        payload.embed?.let { embed ->
-            loadExtractor(
-                embed,
-                reqReferer,
-                subtitleCallback
-            ) { link ->
-                if (isIgnoredM3u8(link.url)) return@loadExtractor
-                foundAny = true
-                callback(link)
-            }
-        }
-
-        // Fallback to direct HLS if embed extraction did not produce playable links.
+        // Use direct HLS only after verification. Avoid extractor dead links.
         if (!foundAny) {
             val fallbackM3u8 = listOfNotNull(
                 sanitizeM3u8(refreshedM3u8),
