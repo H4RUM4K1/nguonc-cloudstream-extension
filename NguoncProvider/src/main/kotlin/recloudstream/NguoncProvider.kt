@@ -41,6 +41,12 @@ class NguoncProvider : MainAPI() {
         return url?.lowercase()?.contains("sing.phimmoi.net") == true
     }
 
+    private fun sanitizeM3u8(url: String?): String? {
+        val value = url?.trim()
+        if (value.isNullOrBlank()) return null
+        return if (isIgnoredM3u8(value)) null else value
+    }
+
     private fun refererVariants(vararg refs: String?): List<String> {
         return refs.asSequence()
             .filterNotNull()
@@ -100,6 +106,8 @@ class NguoncProvider : MainAPI() {
         referers: List<String>,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        if (isIgnoredM3u8(m3u8Url)) return false
+
         val candidates = referers
             .map { it.trim() }
             .filter { it.startsWith("http") }
@@ -146,11 +154,13 @@ class NguoncProvider : MainAPI() {
 
         val episodePayloads = detail.episodes.orEmpty().flatMap { serverGroup ->
             serverGroup.items.mapNotNull { item ->
-                if (item.m3u8.isNullOrBlank() && item.embed.isNullOrBlank()) return@mapNotNull null
+                val safeM3u8 = sanitizeM3u8(item.m3u8)
+                val safeEmbed = item.embed?.trim()
+                if (safeM3u8.isNullOrBlank() && safeEmbed.isNullOrBlank()) return@mapNotNull null
                 newEpisode(
                     LinkPayload(
-                        m3u8 = item.m3u8?.trim(),
-                        embed = item.embed?.trim(),
+                        m3u8 = safeM3u8,
+                        embed = safeEmbed,
                         referer = detailUrl
                     ).toJson()
                 ) {
@@ -198,6 +208,7 @@ class NguoncProvider : MainAPI() {
                 foundRaw = emitM3u8Candidates(raw, listOf(mainUrl), callback)
             } else {
                 loadExtractor(raw, mainUrl, subtitleCallback) { link ->
+                    if (isIgnoredM3u8(link.url)) return@loadExtractor
                     foundRaw = true
                     callback(link)
                 }
@@ -226,6 +237,7 @@ class NguoncProvider : MainAPI() {
                 reqReferer,
                 subtitleCallback
             ) { link ->
+                if (isIgnoredM3u8(link.url)) return@loadExtractor
                 foundAny = true
                 callback(link)
             }
@@ -234,8 +246,8 @@ class NguoncProvider : MainAPI() {
         // Fallback to direct HLS if embed extraction did not produce playable links.
         if (!foundAny) {
             val fallbackM3u8 = listOfNotNull(
-                refreshedM3u8?.takeUnless { isIgnoredM3u8(it) },
-                payload.m3u8?.takeUnless { isIgnoredM3u8(it) }
+                sanitizeM3u8(refreshedM3u8),
+                sanitizeM3u8(payload.m3u8)
             ).firstOrNull()
 
             fallbackM3u8?.let { hls ->
