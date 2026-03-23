@@ -1,0 +1,148 @@
+package recloudstream
+
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.StringUtils.encodeUri
+import com.lagradost.cloudstream3.utils.newExtractorLink
+
+class NguoncProvider : MainAPI() {
+    override var mainUrl = "https://phim.nguonc.com"
+    private val apiBase = "$mainUrl/api"
+    override var name = "NguonC"
+    override var lang = "vi"
+    override val hasMainPage = false
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val endpoint = "$apiBase/films/search?keyword=${query.encodeUri()}"
+        val response = app.get(endpoint).parsedSafe<SearchEnvelope>() ?: return emptyList()
+
+        return response.items.mapNotNull { item ->
+            val slug = item.slug ?: return@mapNotNull null
+            val title = item.name ?: return@mapNotNull null
+            val type = if ((item.totalEpisodes ?: 0) > 1) TvType.TvSeries else TvType.Movie
+            newMovieSearchResponse(title, slug, type) {
+                posterUrl = item.posterUrl
+            }
+        }
+    }
+
+    override suspend fun load(url: String): LoadResponse? {
+        val endpoint = "$apiBase/film/$url"
+        val response = app.get(endpoint).parsedSafe<FilmDetailResponse>() ?: return null
+        val detail = response.movie ?: return null
+
+        val episodePayloads = detail.episodes.orEmpty().flatMap { serverGroup ->
+            serverGroup.items.mapNotNull { item ->
+                if (item.m3u8.isNullOrBlank() && item.embed.isNullOrBlank()) return@mapNotNull null
+                Episode(
+                    data = LinkPayload(
+                        m3u8 = item.m3u8,
+                        embed = item.embed,
+                        referer = mainUrl
+                    ).toJson(),
+                    name = item.name ?: "Episode"
+                )
+            }
+        }
+
+        return if (episodePayloads.isEmpty() || (detail.totalEpisodes ?: 1) <= 1) {
+            val movieData = episodePayloads.firstOrNull()?.data ?: LinkPayload(
+                m3u8 = null,
+                embed = null,
+                referer = mainUrl
+            ).toJson()
+
+            newMovieLoadResponse(detail.name ?: return null, url, TvType.Movie, movieData) {
+                posterUrl = detail.posterUrl
+                plot = detail.description
+            }
+        } else {
+            newTvSeriesLoadResponse(detail.name ?: return null, url, TvType.TvSeries, episodePayloads) {
+                posterUrl = detail.posterUrl
+                plot = detail.description
+            }
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val payload = tryParseJson<LinkPayload>(data) ?: return false
+
+        payload.m3u8?.let { hls ->
+            callback(
+                newExtractorLink(name, "$name HLS", hls) {
+                    referer = payload.referer ?: mainUrl
+                    quality = Qualities.Unknown.value
+                    type = ExtractorLinkType.M3U8
+                }
+            )
+            return true
+        }
+
+        payload.embed?.let { embed ->
+            callback(
+                newExtractorLink(name, "$name Embed", embed) {
+                    referer = payload.referer ?: mainUrl
+                    quality = Qualities.Unknown.value
+                }
+            )
+            return true
+        }
+
+        return false
+    }
+}
+
+data class LinkPayload(
+    @JsonProperty("m3u8") val m3u8: String? = null,
+    @JsonProperty("embed") val embed: String? = null,
+    @JsonProperty("referer") val referer: String? = null
+)
+
+data class SearchEnvelope(
+    @JsonProperty("status") val status: String? = null,
+    @JsonProperty("items") val items: List<SearchItem> = emptyList()
+)
+
+data class SearchItem(
+    @JsonProperty("name") val name: String? = null,
+    @JsonProperty("slug") val slug: String? = null,
+    @JsonProperty("poster_url") val posterUrl: String? = null,
+    @JsonProperty("total_episodes") val totalEpisodes: Int? = null
+)
+
+data class FilmDetailResponse(
+    @JsonProperty("status") val status: String? = null,
+    @JsonProperty("movie") val movie: MovieDetail? = null
+)
+
+data class MovieDetail(
+    @JsonProperty("name") val name: String? = null,
+    @JsonProperty("slug") val slug: String? = null,
+    @JsonProperty("poster_url") val posterUrl: String? = null,
+    @JsonProperty("description") val description: String? = null,
+    @JsonProperty("total_episodes") val totalEpisodes: Int? = null,
+    @JsonProperty("episodes") val episodes: List<EpisodeServer>? = null
+)
+
+data class EpisodeServer(
+    @JsonProperty("server_name") val serverName: String? = null,
+    @JsonProperty("items") val items: List<EpisodeItem> = emptyList()
+)
+
+data class EpisodeItem(
+    @JsonProperty("name") val name: String? = null,
+    @JsonProperty("slug") val slug: String? = null,
+    @JsonProperty("embed") val embed: String? = null,
+    @JsonProperty("m3u8") val m3u8: String? = null
+)
