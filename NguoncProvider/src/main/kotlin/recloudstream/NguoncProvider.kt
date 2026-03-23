@@ -150,6 +150,25 @@ class NguoncProvider : MainAPI() {
         return false
     }
 
+    private suspend fun emitSingleM3u8Fallback(
+        m3u8Url: String,
+        referers: List<String>,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (isIgnoredM3u8(m3u8Url)) return false
+
+        val ref = referers.firstOrNull { it.startsWith("http") } ?: return false
+        callback(
+            newExtractorLink(name, "$name HLS", m3u8Url) {
+                this.referer = ref
+                this.headers = buildStreamHeaders(ref)
+                quality = Qualities.Unknown.value
+                type = ExtractorLinkType.M3U8
+            }
+        )
+        return true
+    }
+
     override suspend fun search(query: String): List<SearchResponse> {
         val endpoint = "$apiBase/films/search?keyword=${query.encodeUri()}"
         val response = app.get(endpoint).parsedSafe<SearchEnvelope>() ?: return emptyList()
@@ -270,6 +289,36 @@ class NguoncProvider : MainAPI() {
                     ),
                     callback
                 )
+
+                // If strict validation rejects all candidates, still return one
+                // non-blocked fallback link to avoid "link not found".
+                if (!foundAny) {
+                    foundAny = emitSingleM3u8Fallback(
+                        hls,
+                        refererVariants(
+                            embedOrigin,
+                            hlsReferer,
+                            reqReferer,
+                            mainUrl
+                        ),
+                        callback
+                    )
+                }
+            }
+        }
+
+        // Last resort: let extractor resolve from embed if no HLS candidate survived.
+        if (!foundAny) {
+            payload.embed?.let { embed ->
+                loadExtractor(
+                    embed,
+                    reqReferer,
+                    subtitleCallback
+                ) { link ->
+                    if (isIgnoredM3u8(link.url)) return@loadExtractor
+                    foundAny = true
+                    callback(link)
+                }
             }
         }
 
