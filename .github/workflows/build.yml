@@ -8,6 +8,9 @@ on:
     paths-ignore:
       - '*.md'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -31,6 +34,32 @@ jobs:
 
       - name: Build plugins
         run: gradle make makePluginsJson ensureJarCompatibility
+
+      - name: Publish builds branch
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+
+          rm -rf builds_out
+          mkdir -p builds_out
+
+          cp **/build/*.cs3 builds_out/ || true
+          cp **/build/*.jar builds_out/ || true
+          cp build/plugins.json builds_out/plugins.json
+          cp build/plugins.json builds_out/repo.json
+
+          cd builds_out
+          git init
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add .
+          git commit -m "Build $GITHUB_SHA"
+          git branch -M builds
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin builds
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
