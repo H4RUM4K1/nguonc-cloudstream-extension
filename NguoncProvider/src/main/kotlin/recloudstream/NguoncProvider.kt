@@ -29,26 +29,29 @@ class NguoncProvider : MainAPI() {
             .substringAfterLast('/')
     }
 
-    private suspend fun emitM3u8IfValid(
+    private fun emitM3u8Candidates(
         m3u8Url: String,
-        referer: String,
+        referers: List<String>,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return try {
-            val probe = app.get(m3u8Url, referer = referer).text
-            if (!probe.contains("#EXTM3U", ignoreCase = true)) return false
+        val candidates = referers
+            .map { it.trim() }
+            .filter { it.startsWith("http") }
+            .distinct()
 
+        if (candidates.isEmpty()) return false
+
+        candidates.forEach { ref ->
             callback(
                 newExtractorLink(name, "$name HLS", m3u8Url) {
-                    this.referer = referer
+                    this.referer = ref
                     quality = Qualities.Unknown.value
                     type = ExtractorLinkType.M3U8
                 }
             )
-            true
-        } catch (_: Throwable) {
-            false
         }
+
+        return true
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -124,7 +127,7 @@ class NguoncProvider : MainAPI() {
             var foundRaw = false
 
             if (raw.contains(".m3u8", ignoreCase = true)) {
-                foundRaw = emitM3u8IfValid(raw, mainUrl, callback)
+                foundRaw = emitM3u8Candidates(raw, listOf(mainUrl), callback)
             } else {
                 loadExtractor(raw, subtitleCallback) { link ->
                     foundRaw = true
@@ -155,7 +158,15 @@ class NguoncProvider : MainAPI() {
         // Fallback to direct HLS if extractor did not return any link.
         if (!foundAny) {
             payload.m3u8?.let { hls ->
-                foundAny = emitM3u8IfValid(hls, hlsReferer, callback)
+                foundAny = emitM3u8Candidates(
+                    hls,
+                    listOf(
+                        hlsReferer,
+                        reqReferer,
+                        mainUrl
+                    ),
+                    callback
+                )
             }
         }
 
