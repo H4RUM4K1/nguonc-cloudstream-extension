@@ -14,7 +14,7 @@ class NguoncProvider : MainAPI() {
     override var mainUrl = "https://phim.nguonc.com"
     private val apiBase = "$mainUrl/api"
     override var name = "NguonC"
-    override var lang = "vi"
+    override var lang = "en"
     override val hasMainPage = false
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
